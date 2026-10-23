@@ -263,3 +263,34 @@ def test_compose_mounts_platform_settings_read_only_on_the_backend_only():
         if name != "backend" and any(m.split(":", 1)[0] == "./settings" for m in mounts(svc or {}))
     ]
     assert others == [], f"only the backend may mount ./settings, also mounted by {others}"
+
+
+# --------------------------------------------------------------------------- #
+# SMTP_TIMEOUT_SECONDS: default 10, positive integers only
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("raw", [None, "", "   "], ids=["unset", "empty", "blank"])
+def test_smtp_timeout_seconds_defaults_to_10_when_unset_or_empty(monkeypatch, raw):
+    if raw is None:
+        monkeypatch.delenv("SMTP_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("SMTP_TIMEOUT_SECONDS", raw)
+    assert config_mod.Settings().smtp_timeout_seconds == 10
+
+
+def test_smtp_timeout_seconds_reads_a_positive_integer(monkeypatch):
+    monkeypatch.setenv("SMTP_TIMEOUT_SECONDS", "25")
+    assert config_mod.Settings().smtp_timeout_seconds == 25
+
+
+@pytest.mark.parametrize(
+    "raw,message",
+    [("0", "must be positive"), ("-5", "must be positive"), ("ten", "must be an integer"), ("2.5", "must be an integer")],
+)
+def test_smtp_timeout_seconds_rejects_a_non_positive_or_non_integer_value(monkeypatch, raw, message):
+    from pydantic import ValidationError
+
+    monkeypatch.setenv("SMTP_TIMEOUT_SECONDS", raw)
+    with pytest.raises(ValidationError, match=f"SMTP_TIMEOUT_SECONDS {message}"):
+        config_mod.Settings()

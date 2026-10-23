@@ -29,6 +29,8 @@ dependencies = [
     "cryptography>=42",
     # Validates SmtpConfiguration.from_address as pydantic EmailStr (app/email_settings.py).
     "email-validator>=2.0",
+    # Async SMTP client for send_email() (app/services/email.py).
+    "aiosmtplib>=5.0",
 ]
 
 [dependency-groups]

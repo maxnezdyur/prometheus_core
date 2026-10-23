@@ -22,6 +22,7 @@ a bad configuration, turns email off (or skips that configuration) and records w
 import functools
 import os
 import re
+import ssl
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping
 
@@ -109,6 +110,17 @@ def _password_env(reference: str) -> str | None:
     return env_name if PASSWORD_ENV_RE.match(env_name) else None
 
 
+def _ca_bundle_error(path: str) -> str | None:
+    """Why the CA bundle at ``path`` cannot be used, else ``None``."""
+    try:
+        ssl.create_default_context(cafile=path)
+    except ssl.SSLError:
+        return f"ca_bundle: not a valid PEM CA bundle: {path}"
+    except (OSError, ValueError):
+        return f"ca_bundle: file not found: {path}"
+    return None
+
+
 def _load_configuration(
     name: str, raw: Any, source: Mapping[str, str]
 ) -> LoadedSmtpConfiguration | tuple[str, str | None]:
@@ -119,6 +131,10 @@ def _load_configuration(
         config = SmtpConfiguration.model_validate(raw)
     except ValidationError as exc:
         return (_validation_error_text(exc), None)
+    if config.ca_bundle is not None and config.security != "none":
+        ca_bundle_error = _ca_bundle_error(config.ca_bundle)
+        if ca_bundle_error is not None:
+            return (ca_bundle_error, None)
     if config.password is None:
         return LoadedSmtpConfiguration(name=name, config=config, password_env=None, password=None)
     env_name = _password_env(config.password)

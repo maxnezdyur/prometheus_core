@@ -297,3 +297,213 @@ def test_startup_logs_email_summary_at_info_on_a_uvicorn_logger(monkeypatch, tmp
         r.levelno == logging.WARNING and "configuration other is invalid" in r.getMessage() for r in caplog.records
     )
     assert not any("s3cret-smtp" in r.getMessage() for r in caplog.records)
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/admin/email-settings/test outcomes
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def relay_email_settings(tmp_path, override_email_settings) -> EmailSettings:
+    """Two valid configurations; the default is `primary`, so a request for `relay` proves
+    that the body's configuration reaches send_email."""
+    path = tmp_path / "platform-settings.yml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "smtp": {
+                    "default": "primary",
+                    "configurations": {
+                        "primary": {"host": "smtp.example.com", "from_address": "primary@example.com"},
+                        "relay": {"host": "mailrelay.example.com", "from_address": "prometheus@example.com"},
+                    },
+                }
+            }
+        )
+    )
+    state = load_email_settings(str(path), env={})
+    assert set(state.configurations) == {"primary", "relay"}
+    override_email_settings(state)
+    return state
+
+
+def _patch_send_email(monkeypatch, error: Exception | None = None) -> list[dict]:
+    from app.routers import admin_email_settings
+
+    calls: list[dict] = []
+
+    async def fake_send_email(to, subject, text, *, configuration=None, **kwargs):
+        calls.append({"to": to, "configuration": configuration})
+        if error is not None:
+            raise error
+
+    monkeypatch.setattr(admin_email_settings, "send_email", fake_send_email)
+    return calls
+
+
+def test_email_test_route_outcomes_success_returns_ok_true(monkeypatch, wire_db_session, relay_email_settings):
+    """POST /api/admin/email-settings/test MUST return 200 with `ok: true` after a successful send."""
+    calls = _patch_send_email(monkeypatch)
+    client = _client_as(monkeypatch, role="admin", sid="s-email-test-ok")
+
+    resp = client.post("/api/admin/email-settings/test", json={"to": "admin@example.com", "configuration": "relay"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": True,
+        "configuration": "relay",
+        "to": "admin@example.com",
+        "stage": None,
+        "error": None,
+    }
+    assert calls == [{"to": "admin@example.com", "configuration": "relay"}]
+
+
+def test_email_test_route_outcomes_without_configuration_sends_through_default(
+    monkeypatch, wire_db_session, relay_email_settings
+):
+    """POST /api/admin/email-settings/test without a `configuration` MUST send through the default
+    configuration and name it in the 200 `ok: true` result."""
+    calls = _patch_send_email(monkeypatch)
+    client = _client_as(monkeypatch, role="admin", sid="s-email-test-default")
+
+    resp = client.post("/api/admin/email-settings/test", json={"to": "admin@example.com"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": True,
+        "configuration": "primary",
+        "to": "admin@example.com",
+        "stage": None,
+        "error": None,
+    }
+    assert calls == [{"to": "admin@example.com", "configuration": "primary"}]
+
+
+def test_email_test_route_outcomes_smtp_failure_returns_ok_false_with_stage(
+    monkeypatch, wire_db_session, relay_email_settings
+):
+    """POST /api/admin/email-settings/test MUST return 200 with `ok: false`, the failed `stage` and the
+    `error` after an SMTP failure."""
+    from app.services.email import EmailSendError
+
+    calls = _patch_send_email(monkeypatch, EmailSendError("auth", "535 authentication failed"))
+    client = _client_as(monkeypatch, role="admin", sid="s-email-test-fail")
+
+    resp = client.post("/api/admin/email-settings/test", json={"to": "admin@example.com", "configuration": "relay"})
+
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "ok": False,
+        "configuration": "relay",
+        "to": "admin@example.com",
+        "stage": "auth",
+        "error": "535 authentication failed",
+    }
+    assert calls == [{"to": "admin@example.com", "configuration": "relay"}]
+
+
+# --------------------------------------------------------------------------- #
+# POST /api/admin/email-settings/test errors
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def smtp_send_calls(monkeypatch) -> list[dict]:
+    """A recording fake for ``aiosmtplib.send`` under the real send_email; it opens no connection."""
+    import aiosmtplib
+
+    calls: list[dict] = []
+
+    async def fake_send(message, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(aiosmtplib, "send", fake_send)
+    return calls
+
+
+def _use_email_state(monkeypatch, override_email_settings, tmp_path, smtp: dict | None) -> None:
+    """Load a real settings state and give it to both the route dependency and send_email."""
+    from app.services import email as email_service
+
+    path = tmp_path / "platform-settings.yml"
+    if smtp is not None:
+        path.write_text(yaml.safe_dump({"smtp": smtp}))
+    state = load_email_settings(str(path), env={})
+    override_email_settings(state)
+    monkeypatch.setattr(email_service, "get_email_settings", lambda: state)
+
+
+_TEST_ROUTE_SMTP = {
+    "default": "relay",
+    "configurations": {
+        "relay": {"host": "mailrelay.example.com", "from_address": "prometheus@example.com"},
+        "other": {
+            "host": "smtp.example.com",
+            "from_address": "other@example.com",
+            "password": "os.environ/SMTP_OTHER_PASSWORD",
+        },
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("role", "smtp", "body", "expected_status", "expected_detail"),
+    [
+        pytest.param(None, _TEST_ROUTE_SMTP, {"to": "admin@example.com"}, 401, None, id="unauthenticated-401"),
+        pytest.param("user", _TEST_ROUTE_SMTP, {"to": "admin@example.com"}, 403, None, id="non-admin-403"),
+        pytest.param("admin", None, {"to": "admin@example.com"}, 409, "Email is not configured", id="no-file-409"),
+        pytest.param(
+            "admin",
+            {**_TEST_ROUTE_SMTP, "default": "other"},
+            {"to": "admin@example.com"},
+            409,
+            "Email is not configured",
+            id="invalid-default-409",
+        ),
+        pytest.param(
+            "admin",
+            _TEST_ROUTE_SMTP,
+            {"to": "admin@example.com", "configuration": "other"},
+            409,
+            "Email configuration 'other' is invalid: SMTP_OTHER_PASSWORD is not set",
+            id="invalid-configuration-409",
+        ),
+        pytest.param(
+            "admin",
+            _TEST_ROUTE_SMTP,
+            {"to": "admin@example.com", "configuration": "missing"},
+            404,
+            "Email configuration 'missing' does not exist",
+            id="unknown-configuration-404",
+        ),
+        pytest.param("admin", _TEST_ROUTE_SMTP, {"to": "not-an-address"}, 422, None, id="invalid-to-422"),
+    ],
+)
+def test_email_test_route_errors(
+    monkeypatch,
+    tmp_path,
+    wire_db_session,
+    override_email_settings,
+    smtp_send_calls,
+    role,
+    smtp,
+    body,
+    expected_status,
+    expected_detail,
+):
+    """The test route MUST answer 401 without a session, 403 for a non-admin, 409 when email is not
+    configured or the named configuration is invalid, 404 for an unknown configuration, and 422 for an
+    invalid `to`; no case sends a message."""
+    from app.main import app
+
+    _use_email_state(monkeypatch, override_email_settings, tmp_path, smtp)
+    client = TestClient(app) if role is None else _client_as(monkeypatch, role=role, sid=f"s-email-test-{role}")
+
+    resp = client.post("/api/admin/email-settings/test", json=body)
+
+    assert resp.status_code == expected_status, resp.text
+    if expected_detail is not None:
+        assert resp.json()["detail"] == expected_detail
+    assert smtp_send_calls == []

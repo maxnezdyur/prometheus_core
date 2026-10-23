@@ -303,6 +303,24 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Dev-only mail catcher: the backend sends to mailpit:1025 on agent-network,
+  # so local development never sends real email. SMTP has no host port; only the
+  # web UI and REST API are published. Messages live in container memory only.
+  mailpit:
+    profiles: ["dev"]
+    image: axllent/mailpit:v1.31.6
+    container_name: mailpit
+    ports:
+      - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
+    networks:
+      - agent-network
+    environment:
+      # Accept any SMTP credentials, also without TLS, so a configuration with
+      # a username works against it too.
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    restart: unless-stopped
+
   frontend-prod:
     profiles: ["prod"]
     build:

@@ -22,20 +22,22 @@
 # to the backend service in docker-compose.override.yml.
 
 smtp:
-  default: relay            # optional when exactly one configuration exists
+  default: mailpit          # optional when exactly one configuration exists
   configurations:
     relay:
       host: smtp.example.org
-      port: 25                  # default 587
-      security: none            # none | starttls | ssl; default starttls
+      port: 587                 # default 587
+      security: starttls        # none | starttls | ssl; default starttls
       from_address: prometheus@example.org
       from_name: Prometheus     # optional
       verify_tls: true          # default true
-      ca_bundle: /app/settings/relay-ca.pem   # optional; PPLT-131 reads it
+      # optional; for starttls or ssl, adds this PEM CA bundle to the system
+      # trust store. Checked at load: a missing or invalid file marks this
+      # configuration invalid.
+      # ca_bundle: /app/settings/relay-ca.pem
+      # password: os.environ/SMTP_PASSWORD   # optional; env reference only
     mailpit:
       host: mailpit
       port: 1025
       security: none
       from_address: dev@example.com
-      username: dev             # optional
-      password: os.environ/SMTP_MAILPIT_PASSWORD   # optional; env reference only

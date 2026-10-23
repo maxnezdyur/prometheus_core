@@ -422,14 +422,14 @@ underlying `conversation:{id}` document (and its artifacts) are left untouched.
 
 ## Admin: email settings
 
-The first admin route in this contract. The response models are
-`EmailSettingsOut` and `EmailConfigurationOut` in
+The first admin routes in this contract. The models are `EmailSettingsOut`,
+`EmailConfigurationOut`, `EmailTestRequest` and `EmailTestResult` in
 `app/routers/admin_email_settings.py`. Like the other admin models, they live
-in `app/routers/`, not in `app/contract.py`. The route is read-only. The
-platform settings file (`platform/settings/platform-settings.yml`, read by
-`app/email_settings.py`) is the only source of email settings, and the backend loads it once at startup. The route returns that
-loaded state and does not read the file again. The operator page is
-`docs/docs/dev-docs/platform-settings.md`.
+in `app/routers/`, not in `app/contract.py`. No route changes the settings.
+The platform settings file (`platform/settings/platform-settings.yml`, read by
+`app/email_settings.py`) is the only source of email settings, and the backend
+loads it once at startup. The routes use that loaded state and do not read
+the file again. The operator page is `docs/docs/dev-docs/platform-settings.md`.
 
 ### `GET /api/admin/email-settings` → `EmailSettingsOut`
 
@@ -508,3 +508,81 @@ With no settings file, the route returns no configurations:
   "configurations": []
 }
 ```
+
+### `POST /api/admin/email-settings/test` → `EmailTestResult`
+
+Sends one test message through one SMTP configuration. The request model is
+`EmailTestRequest` and the response model is `EmailTestResult`, both in
+`app/routers/admin_email_settings.py`. The route calls `send_email()` in
+`app/services/email.py`.
+
+Admin only: the route is on the same router, with
+`dependencies=[Depends(require_admin)]`.
+
+Request — `EmailTestRequest`:
+
+- `to` (required) is the recipient. It must be a valid email address
+  (`EmailStr`). There is no default recipient.
+- `configuration` is the name of a configuration in the settings file. With
+  `null` or no key, the route uses the default configuration.
+
+```json
+{ "to": "admin@example.com", "configuration": "relay" }
+```
+
+The message has the subject `Prometheus test email` and a one-line text body
+that names the configuration. It has no HTML part.
+
+Response — `EmailTestResult`. The route answers **200** for every SMTP
+outcome, success or failure. `ok` tells them apart. `configuration` is the
+name of the configuration that the route used, also when the request gave
+`null`. `to` is the recipient of the request.
+
+Success: `stage` and `error` are `null`.
+
+```json
+{
+  "ok": true,
+  "configuration": "relay",
+  "to": "admin@example.com",
+  "stage": null,
+  "error": null
+}
+```
+
+Failure: `stage` is the SMTP step that failed, and `error` is its reason.
+
+```json
+{
+  "ok": false,
+  "configuration": "relay",
+  "to": "admin@example.com",
+  "stage": "auth",
+  "error": "mailrelay.example.com:587: SMTPAuthenticationError: 535 authentication failed"
+}
+```
+
+| `stage` | The step that failed |
+|---|---|
+| `connect` | The TCP connection or the server greeting, including a connect timeout |
+| `tls` | The TLS handshake (`ssl`) or the `STARTTLS` upgrade (`starttls`) |
+| `auth` | The SMTP login |
+| `send` | The server refused the sender, a recipient or the message |
+
+`error` has the form `<host>:<port>: <exception class>: <server reply or
+cause>`, on one line. It never holds the password.
+
+Status codes other than 200 are an `HTTPException` with a `detail` string:
+
+| Status | When | `detail` |
+|---|---|---|
+| **401** | No session cookie | `Not authenticated` |
+| **401** | The session token is not valid or has expired | `Invalid or expired session` |
+| **401** | The session was logged out | `Session has been logged out` |
+| **403** | The session is not an admin | `Admin role required` |
+| **404** | `configuration` names no configuration in the file | `Email configuration '<name>' does not exist` |
+| **409** | `configuration` is `null` and there is no valid default | `Email is not configured` |
+| **409** | `configuration` names an invalid configuration | `Email configuration '<name>' is invalid: <its load error>` |
+| **422** | The body is not valid, for example `to` is not an email address | FastAPI validation errors |
+
+The 404 and 409 answers come before any network call.

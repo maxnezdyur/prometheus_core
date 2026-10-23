@@ -215,6 +215,17 @@ class Settings(BaseSettings):
     platform_settings_path: str = (
         os.environ.get("PROMETHEUS_SETTINGS_PATH") or "/app/settings/platform-settings.yml"
     ).strip()
+    # Bounds the SMTP connect and each SMTP command of app/services/email.py.
+    smtp_timeout_seconds: int = _positive_int(
+        (os.getenv("SMTP_TIMEOUT_SECONDS") or "10").strip() or "10", "SMTP_TIMEOUT_SECONDS"
+    )
+
+    # ``BaseSettings`` also reads the ``SMTP_TIMEOUT_SECONDS`` env var into this field and
+    # would reject an empty value; fall back to the default for it, as above.
+    @field_validator("smtp_timeout_seconds", mode="before")
+    @classmethod
+    def _smtp_timeout_default(cls, v: Any) -> int:
+        return _positive_int(str(v).strip() or "10", "SMTP_TIMEOUT_SECONDS")
 
 
 settings = Settings()

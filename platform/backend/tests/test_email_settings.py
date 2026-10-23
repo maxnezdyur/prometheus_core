@@ -168,6 +168,68 @@ def test_password_reference_to_an_unset_variable_marks_the_configuration_invalid
 
 
 # --------------------------------------------------------------------------- #
+# CA bundle: checked at load for a TLS configuration
+# --------------------------------------------------------------------------- #
+
+
+def _self_signed_ca_pem():
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Prometheus Test CA")])
+    now = datetime.datetime.now(datetime.timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - datetime.timedelta(days=1))
+        .not_valid_after(now + datetime.timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM)
+
+
+def test_ca_bundle_checked_at_load(tmp_path):
+    """Loading MUST mark a TLS configuration invalid when its ``ca_bundle`` file is missing or is
+    not a PEM CA bundle, and MUST still load the other configurations."""
+    missing = str(tmp_path / "absent-ca.pem")
+    text_file = tmp_path / "not-a-ca.pem"
+    text_file.write_text("this is not a certificate\n")
+    valid_pem = tmp_path / "ca.pem"
+    valid_pem.write_bytes(_self_signed_ca_pem())
+    path = _write(
+        tmp_path,
+        {
+            "default": "c",
+            "configurations": {
+                "a": _relay(ca_bundle=missing),
+                "b": _relay(security="ssl", port=465, ca_bundle=str(text_file)),
+                "c": _relay(ca_bundle=str(valid_pem)),
+                "d": _relay(security="none", ca_bundle=missing),
+            },
+        },
+    )
+
+    state = load_email_settings(path, env={})
+
+    assert state.error is None
+    assert state.invalid["a"][0] == f"ca_bundle: file not found: {missing}"
+    assert state.invalid["b"][0] == f"ca_bundle: not a valid PEM CA bundle: {text_file}"
+    assert set(state.invalid) == {"a", "b"}
+    assert set(state.configurations) == {"c", "d"}
+    assert state.configurations["c"].config.ca_bundle == str(valid_pem)
+    assert state.configured is True
+
+
+# --------------------------------------------------------------------------- #
 # Missing or bad file: loading never raises
 # --------------------------------------------------------------------------- #
 
