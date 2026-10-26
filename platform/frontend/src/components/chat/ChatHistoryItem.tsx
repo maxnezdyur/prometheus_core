@@ -24,6 +24,7 @@ import { useRef, useState } from "react";
 import { MoreVertical, Trash2, Pencil, Loader2 } from "lucide-react";
 import { api, ApiError } from "@/lib/api/client";
 import type { ConversationSummary } from "@/lib/api/types";
+import { now as currentTime } from "@/lib/clock";
 
 interface Props {
   conversation: ConversationSummary;
@@ -41,7 +42,7 @@ function relativeDay(timestamp: string): string {
   const then = new Date(timestamp);
   if (Number.isNaN(then.getTime())) return "";
   const startOfDay = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  const now = new Date();
+  const now = currentTime();
   const days = Math.round((startOfDay(now) - startOfDay(then)) / DAY_MS);
   if (days <= 0) return "Today";
   if (days === 1) return "Yesterday";

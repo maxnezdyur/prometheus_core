@@ -19,6 +19,27 @@
  */
 
 import type {
+  Agent,
+  AgentCategory,
+  ArtifactRecord,
+  Checkpoint,
+  ConversationActivity,
+  DataSource,
+  HomeSuggestion,
+  Job,
+  Plan,
+  Role,
+  SettingsOptions,
+  Skill,
+  StorageUsage,
+  TeamMember,
+  ViewerModel,
+  Workflow,
+  WorkflowGraph,
+  WorkflowVersion,
+  WorkspaceContext,
+} from "./contract";
+import type {
   AdminUser,
   AdminUserCreate,
   AdminUserUpdate,
@@ -47,6 +68,7 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public body?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -60,13 +82,16 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!res.ok) {
     let detail = res.statusText;
+    let body: unknown;
     try {
-      const body = await res.json();
-      if (body && typeof body.detail === "string") detail = body.detail;
+      body = await res.json();
+      if (body && typeof (body as { detail?: unknown }).detail === "string") {
+        detail = (body as { detail: string }).detail;
+      }
     } catch {
       /* non-JSON error body — keep statusText */
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(res.status, detail, body);
   }
   // 204/empty bodies → undefined; callers that expect a body type won't hit this.
   if (res.status === 204) return undefined as T;
@@ -257,5 +282,121 @@ export const api = {
 
   deleteOidcProvider(id: string): Promise<void> {
     return request<void>(`/admin/oidc-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+  },
+
+  /** GET /api/conversations/{id} */
+  getConversation(conversationId: string): Promise<ConversationDetailResponse> {
+    return request<ConversationDetailResponse>(`/conversations/${encodeURIComponent(conversationId)}`);
+  },
+
+  // --- proposed contract (PPLT-244; served by src/mocks until a backend route exists) ---
+  /** GET /api/workspace */
+  getWorkspace(): Promise<WorkspaceContext> {
+    return request<WorkspaceContext>("/workspace");
+  },
+
+  /** GET /api/home/suggestions */
+  listHomeSuggestions(): Promise<HomeSuggestion[]> {
+    return request<HomeSuggestion[]>("/home/suggestions");
+  },
+
+  /** GET /api/conversations/{id}/activity */
+  getConversationActivity(conversationId: string): Promise<ConversationActivity> {
+    return request<ConversationActivity>(`/conversations/${encodeURIComponent(conversationId)}/activity`);
+  },
+
+  /** GET /api/jobs */
+  listJobs(): Promise<Job[]> {
+    return request<Job[]>("/jobs");
+  },
+
+  /** GET /api/artifacts */
+  listArtifacts(): Promise<ArtifactRecord[]> {
+    return request<ArtifactRecord[]>("/artifacts");
+  },
+
+  /** GET /api/artifacts/{id}/model */
+  getViewerModel(artifactId: string): Promise<ViewerModel> {
+    return request<ViewerModel>(`/artifacts/${encodeURIComponent(artifactId)}/model`);
+  },
+
+  /** GET /api/agents */
+  listAgents(): Promise<Agent[]> {
+    return request<Agent[]>("/agents");
+  },
+
+  /** GET /api/agents/{id} */
+  getAgent(agentId: string): Promise<Agent> {
+    return request<Agent>(`/agents/${encodeURIComponent(agentId)}`);
+  },
+
+  /** GET /api/agent-categories */
+  listAgentCategories(): Promise<AgentCategory[]> {
+    return request<AgentCategory[]>("/agent-categories");
+  },
+
+  /** GET /api/skills */
+  listSkills(): Promise<Skill[]> {
+    return request<Skill[]>("/skills");
+  },
+
+  /** GET /api/workflows */
+  listWorkflows(): Promise<Workflow[]> {
+    return request<Workflow[]>("/workflows");
+  },
+
+  /** GET /api/workflows/{id} */
+  getWorkflow(workflowId: string): Promise<Workflow> {
+    return request<Workflow>(`/workflows/${encodeURIComponent(workflowId)}`);
+  },
+
+  /** GET /api/workflows/{id}/versions */
+  listWorkflowVersions(workflowId: string): Promise<WorkflowVersion[]> {
+    return request<WorkflowVersion[]>(`/workflows/${encodeURIComponent(workflowId)}/versions`);
+  },
+
+  /** GET /api/graphs/{id} */
+  getGraph(graphId: string): Promise<WorkflowGraph> {
+    return request<WorkflowGraph>(`/graphs/${encodeURIComponent(graphId)}`);
+  },
+
+  /** GET /api/plans/{id} */
+  getPlan(planId: string): Promise<Plan> {
+    return request<Plan>(`/plans/${encodeURIComponent(planId)}`);
+  },
+
+  /** GET /api/checkpoints */
+  listCheckpoints(): Promise<Checkpoint[]> {
+    return request<Checkpoint[]>("/checkpoints");
+  },
+
+  /** GET /api/checkpoints/{id} */
+  getCheckpoint(checkpointId: string): Promise<Checkpoint> {
+    return request<Checkpoint>(`/checkpoints/${encodeURIComponent(checkpointId)}`);
+  },
+
+  /** GET /api/data-sources */
+  listDataSources(): Promise<DataSource[]> {
+    return request<DataSource[]>("/data-sources");
+  },
+
+  /** GET /api/storage */
+  getStorage(): Promise<StorageUsage> {
+    return request<StorageUsage>("/storage");
+  },
+
+  /** GET /api/members */
+  listMembers(): Promise<TeamMember[]> {
+    return request<TeamMember[]>("/members");
+  },
+
+  /** GET /api/roles */
+  listRoles(): Promise<Role[]> {
+    return request<Role[]>("/roles");
+  },
+
+  /** GET /api/settings/options */
+  getSettingsOptions(): Promise<SettingsOptions> {
+    return request<SettingsOptions>("/settings/options");
   },
 };

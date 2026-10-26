@@ -15,10 +15,19 @@
  * artifact storage usage and the generated artifacts. Same
  * useSyncExternalStore pattern as store/session.ts.
  *
- * The data is placeholder only and nothing changes it; PPLT-244 replaces the
- * constants below with an api call in this file.
+ * Loads from `api.listDataSources()`, `api.getStorage()`, `api.listArtifacts()`
+ * and `api.listAgents()` on the first subscribe. In UI preview mode MSW answers
+ * them (src/mocks); with a backend, the same calls go to the backend.
  */
 import { useSyncExternalStore } from "react";
+import { api } from "@/lib/api/client";
+import type {
+  Agent as AgentRecord,
+  ArtifactRecord,
+  DataSource as SourceRecord,
+  StorageUsage as StorageRecord,
+} from "@/lib/api/contract";
+import { relativeTime } from "@/lib/clock";
 
 export type SourceStatus = "connected" | "syncing" | "disconnected";
 export type ArtifactType = "report" | "mesh" | "result";
@@ -57,138 +66,67 @@ export interface DataManagementState {
   artifacts: Artifact[];
 }
 
-// placeholder: replace with API (see PPLT-244)
-const SOURCES: DataSource[] = [
-  {
-    id: "mcnp-input-decks",
-    connector_class: "S3_BUCKET",
-    name: "MCNP Input Deck Repository",
-    status: "connected",
-    enabled: true,
-    last_sync: "10m ago",
-    volume_bytes: 2.4e12,
-  },
-  {
-    id: "cad-model-vault",
-    connector_class: "FILE_SYSTEM",
-    name: "CAD Model Vault (NX/STEP)",
-    status: "connected",
-    enabled: true,
-    last_sync: "2h ago",
-    volume_bytes: 890e9,
-  },
-  {
-    id: "relap5-results",
-    connector_class: "POSTGRESQL",
-    name: "RELAP5 Results Database",
-    status: "syncing",
-    enabled: true,
-    last_sync: "Syncing...",
-    volume_bytes: 1.2e12,
-  },
-  {
-    id: "materials-properties",
-    connector_class: "REST_API",
-    name: "Materials Properties DB",
-    status: "connected",
-    enabled: true,
-    last_sync: "1d ago",
-    volume_bytes: 320e9,
-  },
-  {
-    id: "reactor-operating-logs",
-    connector_class: "S3_BUCKET",
-    name: "Reactor Operating Logs",
-    status: "disconnected",
-    enabled: false,
-    last_sync: "3d ago",
-    volume_bytes: 4.1e12,
-  },
-  {
-    id: "nrc-regulatory-library",
-    connector_class: "WEB_CRAWL",
-    name: "NRC Regulatory Library",
-    status: "connected",
-    enabled: true,
-    last_sync: "5h ago",
-    volume_bytes: 150e9,
-  },
-];
-
-// placeholder: replace with API (see PPLT-244)
-const STORAGE: StorageUsage = { used_bytes: 1.8e12, total_bytes: 5.0e12 };
-
-// placeholder: replace with API (see PPLT-244)
-const ARTIFACTS: Artifact[] = [
-  {
-    id: "RUN-3942-thermal_hydraulic_summary.pdf",
-    name: "thermal_hydraulic_summary.pdf",
-    type: "report",
-    agent: "Thermal-Hydraulic Modeler",
-    run_id: "RUN-3942",
-    size_bytes: 12.4e6,
-    created: "2h ago",
-  },
-  {
-    id: "RUN-3941-core_mesh_v3.exo",
-    name: "core_mesh_v3.exo",
-    type: "mesh",
-    agent: "Mesh Generator",
-    run_id: "RUN-3941",
-    size_bytes: 1.8e9,
-    created: "3h ago",
-  },
-  {
-    id: "RUN-3938-dose_rate_map.csv",
-    name: "dose_rate_map.csv",
-    type: "result",
-    agent: "Dose Rate Calculator",
-    run_id: "RUN-3938",
-    size_bytes: 450e6,
-    created: "5h ago",
-  },
-  {
-    id: "RUN-3935-cfd_flow_field.vtu",
-    name: "cfd_flow_field.vtu",
-    type: "result",
-    agent: "CFD Flow Analyzer",
-    run_id: "RUN-3935",
-    size_bytes: 84e3,
-    created: "1d ago",
-  },
-  {
-    id: "RUN-3930-neutronics_report.pdf",
-    name: "neutronics_report.pdf",
-    type: "report",
-    agent: "MCNP Neutronics Solver",
-    run_id: "RUN-3930",
-    size_bytes: 1.2e6,
-    created: "2d ago",
-  },
-  {
-    id: "RUN-3928-keff_tally_results.csv",
-    name: "keff_tally_results.csv",
-    type: "result",
-    agent: "MCNP Neutronics Solver",
-    run_id: "RUN-3928",
-    size_bytes: 340e6,
-    created: "3d ago",
-  },
-];
-
 export function derive(sources: DataSource[], artifacts: Artifact[]): DataStatus {
   return sources.length === 0 && artifacts.length === 0 ? "empty" : "ready";
 }
 
-const state: DataManagementState = {
-  status: derive(SOURCES, ARTIFACTS),
-  sources: SOURCES,
-  storage: STORAGE,
-  artifacts: ARTIFACTS,
-};
+const EMPTY = { sources: [], storage: { used_bytes: 0, total_bytes: 0 }, artifacts: [] };
+let state: DataManagementState = { status: "loading", ...EMPTY };
+let started = false;
 const listeners = new Set<() => void>();
 
+function set(next: DataManagementState): void {
+  state = next;
+  for (const l of listeners) l();
+}
+
+/** Map one API source to the card's view. */
+export function toSource(r: SourceRecord): DataSource {
+  return {
+    id: r.source_id,
+    connector_class: r.type.toUpperCase(),
+    name: r.name,
+    status: r.status,
+    enabled: r.enabled,
+    last_sync: r.status === "syncing" || !r.last_sync_at ? "Syncing..." : relativeTime(r.last_sync_at, "short"),
+    volume_bytes: r.volume_bytes,
+  };
+}
+
+/** Map one API artifact to the table row, naming its producing agent. */
+export function toArtifact(r: ArtifactRecord, agents: AgentRecord[]): Artifact {
+  return {
+    id: r.artifact_id,
+    name: r.name,
+    type: r.kind,
+    agent: agents.find((a) => a.agent_id === r.producer_agent_id)?.name ?? "",
+    run_id: r.run_id ?? "",
+    size_bytes: r.size_bytes,
+    created: r.created_at ? relativeTime(r.created_at, "short") : "",
+  };
+}
+
+export function toStorage(r: StorageRecord): StorageUsage {
+  return { used_bytes: r.used_bytes, total_bytes: r.capacity_bytes };
+}
+
+function load(): void {
+  if (started) return;
+  started = true;
+  Promise.all([api.listDataSources(), api.getStorage(), api.listArtifacts(), api.listAgents()])
+    .then(([sources, storage, artifacts, agents]) => {
+      const view = {
+        sources: sources.filter((r) => r.role === "read").map(toSource),
+        storage: toStorage(storage),
+        artifacts: artifacts.map((r) => toArtifact(r, agents)),
+      };
+      set({ status: derive(view.sources, view.artifacts), ...view });
+    })
+    .catch(() => set({ status: "error", ...EMPTY }));
+}
+
 function subscribe(cb: () => void): () => void {
+  load();
   listeners.add(cb);
   return () => listeners.delete(cb);
 }
@@ -201,9 +139,9 @@ export function useDataManagement(): DataManagementState {
   return useSyncExternalStore(subscribe, getSnapshot);
 }
 
-/** Used storage as a whole percentage of the total (36 for the placeholder). */
+/** Used storage as a whole percentage of the total; 0 when there is no capacity. */
 export function storagePercent(s: StorageUsage): number {
-  return Math.round((s.used_bytes / s.total_bytes) * 100);
+  return s.total_bytes > 0 ? Math.round((s.used_bytes / s.total_bytes) * 100) : 0;
 }
 
 const UNITS = ["B", "KB", "MB", "GB", "TB"];

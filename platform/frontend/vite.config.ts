@@ -10,19 +10,50 @@
 //
 // SPDX-License-Identifier: MIT
 
+import { readFileSync } from "fs";
+import { createRequire } from "module";
 import path from "path";
 import react from "@vitejs/plugin-react-swc";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import { nodePolyfills } from "vite-plugin-node-polyfills";
 
 const BACKEND_TARGET = process.env.VITE_BACKEND_URL || "http://localhost:8600";
+
+// Serves and emits the MSW worker only when VITE_UI_PREVIEW=true, so the
+// worker always matches the installed msw and a normal build has no worker.
+function mockWorker(): Plugin {
+  const workerPath = createRequire(import.meta.url).resolve("msw/mockServiceWorker.js");
+  let enabled = false;
+  return {
+    name: "mock-worker",
+    configResolved(config) {
+      enabled = config.env.VITE_UI_PREVIEW === "true";
+    },
+    configureServer(server) {
+      if (!enabled) return;
+      server.middlewares.use("/mockServiceWorker.js", (_req, res) => {
+        res.setHeader("Content-Type", "application/javascript");
+        res.end(readFileSync(workerPath));
+      });
+    },
+    generateBundle() {
+      if (!enabled) return;
+      this.emitFile({
+        type: "asset",
+        fileName: "mockServiceWorker.js",
+        source: readFileSync(workerPath),
+      });
+    },
+  };
+}
 
 export default defineConfig({
   plugins: [
     react(),
     tailwindcss(),
     nodePolyfills({ include: ["events"] }),
+    mockWorker(),
   ],
   resolve: {
     alias: {

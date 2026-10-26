@@ -16,4 +16,13 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 
-ReactDOM.createRoot(document.getElementById("root")!).render(<App />);
+function enableMocks(): Promise<void> {
+  if (import.meta.env.VITE_UI_PREVIEW !== "true") return Promise.resolve();
+  return import("./mocks/browser.ts").then(({ startMocks }) => startMocks());
+}
+
+void enableMocks()
+  .catch((err: unknown) => console.error("UI preview mocks failed to start", err))
+  .then(() => {
+    ReactDOM.createRoot(document.getElementById("root")!).render(<App />);
+  });

@@ -6,7 +6,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:mock": "VITE_UI_PREVIEW=true vite --port 5180",
     "build": "tsc && vite build",
+    "build:mock": "VITE_UI_PREVIEW=true vite build --outDir dist-mock",
+    "check:mock-free": "node scripts/check-mock-free.mjs",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview"
@@ -43,6 +46,7 @@
     "eslint": "^8.45.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "eslint-plugin-react-refresh": "^0.4.3",
+    "msw": "^2.15.0",
     "postcss": "^8.4.31",
     "tailwindcss": "^4.2.2",
     "typescript": "^5.0.2",

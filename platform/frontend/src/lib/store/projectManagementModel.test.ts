@@ -68,7 +68,7 @@ test("countMembersByRole counts each role and gives 0 to a role with no member",
   });
 });
 
-test("countMembersByRole on the TEAM_MEMBERS shape sums to the member count", () => {
+test("countMembersByRole on the six-member fixture shape sums to the member count", () => {
   const members = teamMembersShape();
   const counts = countMembersByRole(members, roles());
 
